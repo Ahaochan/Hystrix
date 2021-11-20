@@ -341,6 +341,8 @@ public abstract class HystrixCommand<R> extends AbstractCommand<R> implements Hy
      */
     public R execute() {
         try {
+            // queue()放入队列, 获取异步Future, 然后同步阻塞get()
+            // 最终execute()方法就是同步阻塞获取返回值
             return queue().get();
         } catch (Exception e) {
             throw Exceptions.sneakyThrow(decomposeException(e));
@@ -375,8 +377,11 @@ public abstract class HystrixCommand<R> extends AbstractCommand<R> implements Hy
          * interruption of the execution thread when the "mayInterrupt" flag of Future.cancel(boolean) is set to true;
          * thus, to comply with the contract of Future, we must wrap around it.
          */
+        // 这里丢到线程池去执行, 拿到的异步Future对象, 是不具备中断能力的, 不能在超时、异常的时候中止这个Future对象线程的执行
+        // 所以要在下面进行一个包装
         final Future<R> delegate = toObservable().toBlocking().toFuture();
-    	
+
+        // 包装上面的delegate, 增强cancel方法, 外部调用这个Future的cancel方法就可以中断上面的delegate Future所在的线程
         final Future<R> f = new Future<R>() {
 
             @Override
@@ -401,6 +406,7 @@ public abstract class HystrixCommand<R> extends AbstractCommand<R> implements Hy
                 if (!isExecutionComplete() && interruptOnFutureCancel.get()) {
                     final Thread t = executionThread.get();
                     if (t != null && !t.equals(Thread.currentThread())) {
+                        // 将delegate的Future对象所在的线程中止掉
                         t.interrupt();
                     }
                 }
@@ -433,6 +439,7 @@ public abstract class HystrixCommand<R> extends AbstractCommand<R> implements Hy
         /* special handling of error states that throw immediately */
         if (f.isDone()) {
             try {
+                // 阻塞, 尝试获取结果
                 f.get();
                 return f;
             } catch (Exception e) {
@@ -441,6 +448,7 @@ public abstract class HystrixCommand<R> extends AbstractCommand<R> implements Hy
                     return f;
                 } else if (t instanceof HystrixRuntimeException) {
                     HystrixRuntimeException hre = (HystrixRuntimeException) t;
+                    // 如果是执行异常或者执行超时, 就直接返回Future对象, 否则抛出异常
                     switch (hre.getFailureType()) {
 					case COMMAND_EXCEPTION:
 					case TIMEOUT:
