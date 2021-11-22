@@ -361,24 +361,32 @@ import java.util.concurrent.atomic.AtomicReference;
      * @throws IllegalStateException
      *             if invoked more than once
      */
+    // 创建了5个回调函数, 挂在Observable上, 然后RxJava执行的时候就会依次回调
     public Observable<R> toObservable() {
+        // 这个_cmd就是创建的HystrixCommand对象
         final AbstractCommand<R> _cmd = this;
 
         //doOnCompleted handler already did all of the SUCCESS work
         //doOnError handler already did all of the FAILURE/TIMEOUT/REJECTION/BAD_REQUEST work
+        // 4. 然后执行这个Action0
         final Action0 terminateCommandCleanup = new Action0() {
 
             @Override
             public void call() {
                 if (_cmd.commandState.compareAndSet(CommandState.OBSERVABLE_CHAIN_CREATED, CommandState.TERMINAL)) {
+                    // 如果Command的状态是OBSERVABLE_CHAIN_CREATED, 就修改为TERMINAL中止
+                    // 说明用户的代码没有被执行过
                     handleCommandEnd(false); //user code never ran
                 } else if (_cmd.commandState.compareAndSet(CommandState.USER_CODE_EXECUTED, CommandState.TERMINAL)) {
+                    // 如果Command的状态是USER_CODE_EXECUTED, 就修改为TERMINAL中止
+                    // 说明用户的代码已经执行过了
                     handleCommandEnd(true); //user code did run
                 }
             }
         };
 
         //mark the command as CANCELLED and store the latency (in addition to standard cleanup)
+        // 6. 然后执行这个Action0
         final Action0 unsubscribeCommandCleanup = new Action0() {
             @Override
             public void call() {
@@ -411,9 +419,11 @@ import java.util.concurrent.atomic.AtomicReference;
             }
         };
 
+        // 2. 然后执行这个Fun0, 真正执行业务代码
         final Func0<Observable<R>> applyHystrixSemantics = new Func0<Observable<R>>() {
             @Override
             public Observable<R> call() {
+                // 此时的状态是OBSERVABLE_CHAIN_CREATED, 跳过这个if
                 if (commandState.get().equals(CommandState.UNSUBSCRIBED)) {
                     return Observable.never();
                 }
@@ -421,6 +431,7 @@ import java.util.concurrent.atomic.AtomicReference;
             }
         };
 
+        // 3. 然后执行这个Fun1
         final Func1<R, R> wrapWithAllOnNextHooks = new Func1<R, R>() {
             @Override
             public R call(R r) {
@@ -441,6 +452,7 @@ import java.util.concurrent.atomic.AtomicReference;
             }
         };
 
+        // 5. 然后执行这个Action0
         final Action0 fireOnCompletedHook = new Action0() {
             @Override
             public void call() {
@@ -452,26 +464,32 @@ import java.util.concurrent.atomic.AtomicReference;
             }
         };
 
+        // 1. toBlocking()就会执行下面的Func0代码
         return Observable.defer(new Func0<Observable<R>>() {
             @Override
             public Observable<R> call() {
                  /* this is a stateful object so can only be used once */
+                // 如果状态不是NOT_STARTED, 就认为执行过了, 直接抛出一个异常
                 if (!commandState.compareAndSet(CommandState.NOT_STARTED, CommandState.OBSERVABLE_CHAIN_CREATED)) {
                     IllegalStateException ex = new IllegalStateException("This instance can only be executed once. Please instantiate a new instance.");
                     //TODO make a new error type for this
                     throw new HystrixRuntimeException(FailureType.BAD_REQUEST_EXCEPTION, _cmd.getClass(), getLogMessagePrefix() + " command executed multiple times - this is not permitted.", ex, null);
                 }
+                // 此时状态是OBSERVABLE_CHAIN_CREATED
 
                 commandStartTimestamp = System.currentTimeMillis();
 
                 if (properties.requestLogEnabled().get()) {
                     // log this command execution regardless of what happened
+                    // 默认requestLogEnabled是true, 但是currentRequestLog为null
                     if (currentRequestLog != null) {
                         currentRequestLog.addExecutedCommand(_cmd);
                     }
                 }
 
+                // requestCacheEnabled默认为true, cacheKey默认为null, 所以默认返回false
                 final boolean requestCacheEnabled = isRequestCachingEnabled();
+                // cacheKey默认为null
                 final String cacheKey = getCacheKey();
 
                 /* try from cache first */
@@ -483,6 +501,7 @@ import java.util.concurrent.atomic.AtomicReference;
                     }
                 }
 
+                // 注册这个Fun0和Fun1
                 Observable<R> hystrixObservable =
                         Observable.defer(applyHystrixSemantics)
                                 .map(wrapWithAllOnNextHooks);
@@ -490,6 +509,7 @@ import java.util.concurrent.atomic.AtomicReference;
                 Observable<R> afterCache;
 
                 // put in cache
+                // 默认cacheKey为null, 跳过缓存代码
                 if (requestCacheEnabled && cacheKey != null) {
                     // wrap it for caching
                     HystrixCachedObservable<R> toCache = HystrixCachedObservable.from(hystrixObservable, _cmd);
@@ -507,6 +527,7 @@ import java.util.concurrent.atomic.AtomicReference;
                     afterCache = hystrixObservable;
                 }
 
+                // 注册3个Action0
                 return afterCache
                         .doOnTerminate(terminateCommandCleanup)     // perform cleanup once (either on normal terminal state (this line), or unsubscribe (next line))
                         .doOnUnsubscribe(unsubscribeCommandCleanup) // perform cleanup once
@@ -518,9 +539,11 @@ import java.util.concurrent.atomic.AtomicReference;
     private Observable<R> applyHystrixSemantics(final AbstractCommand<R> _cmd) {
         // mark that we're starting execution on the ExecutionHook
         // if this hook throws an exception, then a fast-fail occurs with no fallback.  No state is left inconsistent
+        // 默认实现类是HystrixCommandExecutionHookDefault, 里面是空方法实现
         executionHook.onStart(_cmd);
 
         /* determine if we're allowed to execute */
+        // 如果断路器熔断了, 就不执行
         if (circuitBreaker.attemptExecution()) {
             final TryableSemaphore executionSemaphore = getExecutionSemaphore();
             final AtomicBoolean semaphoreHasBeenReleased = new AtomicBoolean(false);
@@ -1724,6 +1747,7 @@ import java.util.concurrent.atomic.AtomicReference;
     }
 
     protected boolean isRequestCachingEnabled() {
+        // requestCacheEnabled默认为true, cacheKey默认为null, 所以默认返回false
         return properties.requestCacheEnabled().get() && getCacheKey() != null;
     }
 
