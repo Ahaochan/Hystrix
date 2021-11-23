@@ -368,7 +368,6 @@ import java.util.concurrent.atomic.AtomicReference;
 
         //doOnCompleted handler already did all of the SUCCESS work
         //doOnError handler already did all of the FAILURE/TIMEOUT/REJECTION/BAD_REQUEST work
-        // 4. 然后执行这个Action0
         final Action0 terminateCommandCleanup = new Action0() {
 
             @Override
@@ -386,7 +385,6 @@ import java.util.concurrent.atomic.AtomicReference;
         };
 
         //mark the command as CANCELLED and store the latency (in addition to standard cleanup)
-        // 6. 然后执行这个Action0
         final Action0 unsubscribeCommandCleanup = new Action0() {
             @Override
             public void call() {
@@ -419,7 +417,7 @@ import java.util.concurrent.atomic.AtomicReference;
             }
         };
 
-        // 2. 然后执行这个Fun0, 真正执行业务代码
+        // 这里去回调执行真正的业务代码
         final Func0<Observable<R>> applyHystrixSemantics = new Func0<Observable<R>>() {
             @Override
             public Observable<R> call() {
@@ -431,7 +429,6 @@ import java.util.concurrent.atomic.AtomicReference;
             }
         };
 
-        // 3. 然后执行这个Fun1
         final Func1<R, R> wrapWithAllOnNextHooks = new Func1<R, R>() {
             @Override
             public R call(R r) {
@@ -452,7 +449,6 @@ import java.util.concurrent.atomic.AtomicReference;
             }
         };
 
-        // 5. 然后执行这个Action0
         final Action0 fireOnCompletedHook = new Action0() {
             @Override
             public void call() {
@@ -464,12 +460,12 @@ import java.util.concurrent.atomic.AtomicReference;
             }
         };
 
-        // 1. toBlocking()就会执行下面的Func0代码
+        // HystrixCommand回调流程1: toBlocking()就会执行下面defer里的回调Func0
         return Observable.defer(new Func0<Observable<R>>() {
             @Override
             public Observable<R> call() {
                  /* this is a stateful object so can only be used once */
-                // 如果状态不是NOT_STARTED, 就认为执行过了, 直接抛出一个异常
+                // 如果状态不是NOT_STARTED, 就认为执行过了, 直接抛出一个异常, 保证只执行一次
                 if (!commandState.compareAndSet(CommandState.NOT_STARTED, CommandState.OBSERVABLE_CHAIN_CREATED)) {
                     IllegalStateException ex = new IllegalStateException("This instance can only be executed once. Please instantiate a new instance.");
                     //TODO make a new error type for this
@@ -494,6 +490,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
                 /* try from cache first */
                 if (requestCacheEnabled) {
+                    // 如果有缓存, 就从缓存里获取值, 直接返回出去
                     HystrixCommandResponseFromCache<R> fromCache = (HystrixCommandResponseFromCache<R>) requestCache.get(cacheKey);
                     if (fromCache != null) {
                         isResponseFromCache = true;
@@ -501,7 +498,7 @@ import java.util.concurrent.atomic.AtomicReference;
                     }
                 }
 
-                // 注册这个Fun0和Fun1
+                // 真正执行业务代码的地方在applyHystrixSemantics里
                 Observable<R> hystrixObservable =
                         Observable.defer(applyHystrixSemantics)
                                 .map(wrapWithAllOnNextHooks);
@@ -529,8 +526,11 @@ import java.util.concurrent.atomic.AtomicReference;
 
                 // 注册3个Action0
                 return afterCache
+                        // 会在Observable结束前回调terminateCommandCleanup, 无论是正常还是异常终止
                         .doOnTerminate(terminateCommandCleanup)     // perform cleanup once (either on normal terminal state (this line), or unsubscribe (next line))
+                        // 取消订阅时的监听会回调unsubscribeCommandCleanup
                         .doOnUnsubscribe(unsubscribeCommandCleanup) // perform cleanup once
+                        // Observable正常结束时的监听
                         .doOnCompleted(fireOnCompletedHook);
             }
         });
@@ -543,8 +543,9 @@ import java.util.concurrent.atomic.AtomicReference;
         executionHook.onStart(_cmd);
 
         /* determine if we're allowed to execute */
-        // 如果断路器熔断了, 就不执行
+        // 断路器会判断是否允许执行
         if (circuitBreaker.attemptExecution()) {
+            // 正常第一次进来是允许执行的
             final TryableSemaphore executionSemaphore = getExecutionSemaphore();
             final AtomicBoolean semaphoreHasBeenReleased = new AtomicBoolean(false);
             final Action0 singleSemaphoreRelease = new Action0() {
@@ -563,13 +564,17 @@ import java.util.concurrent.atomic.AtomicReference;
                 }
             };
 
+            // 获取信号量, 如果隔离策略是线程池的话, 这里就固定是true
             if (executionSemaphore.tryAcquire()) {
                 try {
                     /* used to track userThreadExecutionTime */
                     executionResult = executionResult.setInvocationStartTime(System.currentTimeMillis());
                     return executeCommandAndObserve(_cmd)
+                            //
                             .doOnError(markExceptionThrown)
+                            // 会在Observable结束前回调singleSemaphoreRelease, 无论是正常还是异常终止
                             .doOnTerminate(singleSemaphoreRelease)
+                            // 取消订阅时的监听会回调singleSemaphoreRelease
                             .doOnUnsubscribe(singleSemaphoreRelease);
                 } catch (RuntimeException e) {
                     return Observable.error(e);
@@ -578,6 +583,7 @@ import java.util.concurrent.atomic.AtomicReference;
                 return handleSemaphoreRejectionViaFallback();
             }
         } else {
+            // 如果发生了断路, 就触发fallback
             return handleShortCircuitViaFallback();
         }
     }
@@ -622,6 +628,7 @@ import java.util.concurrent.atomic.AtomicReference;
             }
         };
 
+        // HystrixCommand回调流程6:
         final Func1<Throwable, Observable<R>> handleFallback = new Func1<Throwable, Observable<R>>() {
             @Override
             public Observable<R> call(Throwable t) {
@@ -648,6 +655,7 @@ import java.util.concurrent.atomic.AtomicReference;
             }
         };
 
+        // HystrixCommand回调流程8:
         final Action1<Notification<? super R>> setRequestContext = new Action1<Notification<? super R>>() {
             @Override
             public void call(Notification<? super R> rNotification) {
@@ -657,6 +665,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
         Observable<R> execution;
         if (properties.executionTimeoutEnabled().get()) {
+            // 默认开启超时检测, 超时直接抛出异常
             execution = executeCommandWithSpecifiedIsolation(_cmd)
                     .lift(new HystrixObservableTimeoutOperator<R>(_cmd));
         } else {
@@ -672,6 +681,8 @@ import java.util.concurrent.atomic.AtomicReference;
     private Observable<R> executeCommandWithSpecifiedIsolation(final AbstractCommand<R> _cmd) {
         if (properties.executionIsolationStrategy().get() == ExecutionIsolationStrategy.THREAD) {
             // mark that we are executing in a thread (even if we end up being rejected we still were a THREAD execution and not SEMAPHORE)
+            // 如果隔离策略是线程池方式
+            // HystrixCommand回调流程3:
             return Observable.defer(new Func0<Observable<R>>() {
                 @Override
                 public Observable<R> call() {
@@ -713,6 +724,7 @@ import java.util.concurrent.atomic.AtomicReference;
             }).doOnTerminate(new Action0() {
                 @Override
                 public void call() {
+                    // HystrixCommand回调流程7:
                     if (threadState.compareAndSet(ThreadState.STARTED, ThreadState.TERMINAL)) {
                         handleThreadEnd(_cmd);
                     }
@@ -724,6 +736,7 @@ import java.util.concurrent.atomic.AtomicReference;
             }).doOnUnsubscribe(new Action0() {
                 @Override
                 public void call() {
+                    // HystrixCommand回调流程4:
                     if (threadState.compareAndSet(ThreadState.STARTED, ThreadState.UNSUBSCRIBED)) {
                         handleThreadEnd(_cmd);
                     }
@@ -735,10 +748,12 @@ import java.util.concurrent.atomic.AtomicReference;
             }).subscribeOn(threadPool.getScheduler(new Func0<Boolean>() {
                 @Override
                 public Boolean call() {
+                    // HystrixCommand回调流程5:
                     return properties.executionIsolationThreadInterruptOnTimeout().get() && _cmd.isCommandTimedOut.get() == TimedOutStatus.TIMED_OUT;
                 }
             }));
         } else {
+            // 如果隔离策略是信号量方式
             return Observable.defer(new Func0<Observable<R>>() {
                 @Override
                 public Observable<R> call() {
@@ -786,6 +801,7 @@ import java.util.concurrent.atomic.AtomicReference;
         executionResult = executionResult.addEvent((int) latency, eventType);
 
         if (isUnrecoverable(originalException)) {
+            // 如果是不能处理的异常, OOM之类的, 就走这里
             logger.error("Unrecoverable Error for HystrixCommand so will throw HystrixRuntimeException and not apply fallback. ", originalException);
 
             /* executionHook for all errors */
@@ -796,6 +812,7 @@ import java.util.concurrent.atomic.AtomicReference;
                 logger.warn("Recovered from java.lang.Error by serving Hystrix fallback", originalException);
             }
 
+            // 判断是否开启fallback, 默认开启
             if (properties.fallbackEnabled().get()) {
                 /* fallback behavior is permitted so attempt */
 
@@ -1003,6 +1020,7 @@ import java.util.concurrent.atomic.AtomicReference;
         Exception shortCircuitException = new RuntimeException("Hystrix circuit short-circuited and is OPEN");
         executionResult = executionResult.setExecutionException(shortCircuitException);
         try {
+            //
             return getFallbackOrThrowException(this, HystrixEventType.SHORT_CIRCUITED, FailureType.SHORTCIRCUIT,
                     "short-circuited", shortCircuitException);
         } catch (Exception e) {
@@ -1278,6 +1296,7 @@ import java.util.concurrent.atomic.AtomicReference;
      */
     protected TryableSemaphore getExecutionSemaphore() {
         if (properties.executionIsolationStrategy().get() == ExecutionIsolationStrategy.SEMAPHORE) {
+            // 如果隔离策略是根据信号量隔离
             if (executionSemaphoreOverride == null) {
                 TryableSemaphore _s = executionSemaphorePerCircuit.get(commandKey.name());
                 if (_s == null) {
@@ -1293,6 +1312,7 @@ import java.util.concurrent.atomic.AtomicReference;
             }
         } else {
             // return NoOp implementation since we're not using SEMAPHORE isolation
+            // 如果隔离策略是根据线程池隔离
             return TryableSemaphoreNoOp.DEFAULT;
         }
     }
