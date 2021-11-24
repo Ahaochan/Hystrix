@@ -165,6 +165,7 @@ import java.util.concurrent.atomic.AtomicReference;
         this.threadPoolKey = initThreadPoolKey(threadPoolKey, this.commandGroup, this.properties.executionIsolationThreadPoolKeyOverride().get());
         this.metrics = initMetrics(metrics, this.commandGroup, this.threadPoolKey, this.commandKey, this.properties);
         this.circuitBreaker = initCircuitBreaker(this.properties.circuitBreakerEnabled().get(), circuitBreaker, this.commandGroup, this.commandKey, this.properties, this.metrics);
+        // 在创建HystrixCommand的时候, 就初始化好线程池了
         this.threadPool = initThreadPool(threadPool, this.threadPoolKey, threadPoolPropertiesDefaults);
 
         //Strategies from plugins
@@ -275,8 +276,10 @@ import java.util.concurrent.atomic.AtomicReference;
     private static HystrixThreadPool initThreadPool(HystrixThreadPool fromConstructor, HystrixThreadPoolKey threadPoolKey, HystrixThreadPoolProperties.Setter threadPoolPropertiesDefaults) {
         if (fromConstructor == null) {
             // get the default implementation of HystrixThreadPool
+            // 如果外部没有传入线程池, 就做自己初始化一个线程池
             return HystrixThreadPool.Factory.getInstance(threadPoolKey, threadPoolPropertiesDefaults);
         } else {
+            // 如果外部传入了线程池就使用外部的线程池
             return fromConstructor;
         }
     }
@@ -752,7 +755,7 @@ import java.util.concurrent.atomic.AtomicReference;
             }).subscribeOn(threadPool.getScheduler(new Func0<Boolean>() {
                 @Override
                 public Boolean call() {
-                    // HystrixCommand回调流程5:
+                    // HystrixCommand回调流程5: 当这个Observable被订阅的时候，就提交一个Fun0到线程池里去执行
                     return properties.executionIsolationThreadInterruptOnTimeout().get() && _cmd.isCommandTimedOut.get() == TimedOutStatus.TIMED_OUT;
                 }
             }));

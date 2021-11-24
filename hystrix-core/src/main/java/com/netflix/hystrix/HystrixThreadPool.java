@@ -104,6 +104,7 @@ public interface HystrixThreadPool {
             String key = threadPoolKey.name();
 
             // this should find it for all but the first time
+            // 每个key对应一个线程池, 如果缓存没命中就初始化
             HystrixThreadPool previouslyCached = threadPools.get(key);
             if (previouslyCached != null) {
                 return previouslyCached;
@@ -112,6 +113,7 @@ public interface HystrixThreadPool {
             // if we get here this is the first time so we need to initialize
             synchronized (HystrixThreadPool.class) {
                 if (!threadPools.containsKey(key)) {
+                    // HystrixThreadPool线程池的默认实现类是HystrixThreadPoolDefault
                     threadPools.put(key, new HystrixThreadPoolDefault(threadPoolKey, propertiesBuilder));
                 }
             }
@@ -169,11 +171,14 @@ public interface HystrixThreadPool {
         private final int queueSize;
 
         public HystrixThreadPoolDefault(HystrixThreadPoolKey threadPoolKey, HystrixThreadPoolProperties.Setter propertiesDefaults) {
+            // 线程池相关配置
             this.properties = HystrixPropertiesFactory.getThreadPoolProperties(threadPoolKey, propertiesDefaults);
+            // 这个HystrixConcurrencyStrategy可以对callable做一层包装, 也可以对ThreadPoolExecutor线程池做包装
             HystrixConcurrencyStrategy concurrencyStrategy = HystrixPlugins.getInstance().getConcurrencyStrategy();
             this.queueSize = properties.maxQueueSize().get();
 
             this.metrics = HystrixThreadPoolMetrics.getInstance(threadPoolKey,
+                    // HystrixConcurrencyStrategy初始化线程池
                     concurrencyStrategy.getThreadPool(threadPoolKey, properties),
                     properties);
             this.threadPool = this.metrics.getThreadPool();

@@ -92,12 +92,14 @@ public abstract class HystrixConcurrencyStrategy {
     }
 
     public ThreadPoolExecutor getThreadPool(final HystrixThreadPoolKey threadPoolKey, HystrixThreadPoolProperties threadPoolProperties) {
+        // 创建线程的工厂类
         final ThreadFactory threadFactory = getThreadFactory(threadPoolKey);
 
         final boolean allowMaximumSizeToDivergeFromCoreSize = threadPoolProperties.getAllowMaximumSizeToDivergeFromCoreSize().get();
         final int dynamicCoreSize = threadPoolProperties.coreSize().get();
         final int keepAliveTime = threadPoolProperties.keepAliveTimeMinutes().get();
         final int maxQueueSize = threadPoolProperties.maxQueueSize().get();
+        // 任务的阻塞队列, 默认实现类是SynchronousQueue, 不排队, 来一个请求就创建一个线程，超过最大线程数就直接reject了
         final BlockingQueue<Runnable> workQueue = getBlockingQueue(maxQueueSize);
 
         if (allowMaximumSizeToDivergeFromCoreSize) {
@@ -157,6 +159,7 @@ public abstract class HystrixConcurrencyStrategy {
          * and rejecting is the preferred solution.
          */
         if (maxQueueSize <= 0) {
+            // maxQueueSize默认是-1
             return new SynchronousQueue<Runnable>();
         } else {
             return new LinkedBlockingQueue<Runnable>(maxQueueSize);
