@@ -223,6 +223,7 @@ import java.util.concurrent.atomic.AtomicReference;
             // we don't have a property overriding the value so use either HystrixThreadPoolKey or HystrixCommandGroup
             if (threadPoolKey == null) {
                 /* use HystrixCommandGroup if HystrixThreadPoolKey is null */
+                // threadPoolKey默认和groupKey一样
                 return HystrixThreadPoolKey.Factory.asKey(groupKey.name());
             } else {
                 return threadPoolKey;
@@ -687,10 +688,12 @@ import java.util.concurrent.atomic.AtomicReference;
                 @Override
                 public Observable<R> call() {
                     executionResult = executionResult.setExecutionOccurred();
+                    // 保证HystrixCommand只能执行一次, 状态扭转为USER_CODE_EXECUTED
                     if (!commandState.compareAndSet(CommandState.OBSERVABLE_CHAIN_CREATED, CommandState.USER_CODE_EXECUTED)) {
                         return Observable.error(new IllegalStateException("execution attempted while in state : " + commandState.get().name()));
                     }
 
+                    // threadPoolKey默认和groupKey一样
                     metrics.markCommandStart(commandKey, threadPoolKey, ExecutionIsolationStrategy.THREAD);
 
                     if (isCommandTimedOut.get() == TimedOutStatus.TIMED_OUT) {
@@ -703,6 +706,7 @@ import java.util.concurrent.atomic.AtomicReference;
                         HystrixCounters.incrementGlobalConcurrentThreads();
                         threadPool.markThreadExecution();
                         // store the command that is being run
+                        // CommandKey就是方法的唯一标志, 这里会去把CommandKey压入栈
                         endCurrentThreadExecutingCommand = Hystrix.startCurrentThreadExecutingCommand(getCommandKey());
                         executionResult = executionResult.setExecutedInThread();
                         /**
@@ -925,6 +929,7 @@ import java.util.concurrent.atomic.AtomicReference;
         Observable<R> userObservable;
 
         try {
+            // 交给子类HystrixCommand实现, 执行run()方法里的业务代码
             userObservable = getExecutionObservable();
         } catch (Throwable ex) {
             // the run() method is a user provided implementation so can throw instead of using Observable.onError

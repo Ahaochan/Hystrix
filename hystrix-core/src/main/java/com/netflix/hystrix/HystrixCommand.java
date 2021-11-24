@@ -295,6 +295,7 @@ public abstract class HystrixCommand<R> extends AbstractCommand<R> implements Hy
 
     @Override
     final protected Observable<R> getExecutionObservable() {
+        // 执行run()方法里的业务代码
         return Observable.defer(new Func0<Observable<R>>() {
             @Override
             public Observable<R> call() {
