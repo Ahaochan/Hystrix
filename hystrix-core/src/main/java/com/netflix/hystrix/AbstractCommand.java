@@ -372,6 +372,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
         //doOnCompleted handler already did all of the SUCCESS work
         //doOnError handler already did all of the FAILURE/TIMEOUT/REJECTION/BAD_REQUEST work
+
         final Action0 terminateCommandCleanup = new Action0() {
 
             @Override
@@ -429,6 +430,10 @@ import java.util.concurrent.atomic.AtomicReference;
                 if (commandState.get().equals(CommandState.UNSUBSCRIBED)) {
                     return Observable.never();
                 }
+                // applyHystrixSemantics构造了一个Observable, 然后注册上各种回调函数, 交给subscribeOn里面的线程池去执行
+                // Observable.defer(...).doOnTerminate(...).doOnUnsubscribe(...).subscribeOn(...)
+                //         .doOnNext(...).doOnCompleted(...).onErrorResumeNext(...).doOnEach(...)
+                //         .doOnError(...).doOnTerminate(...).doOnUnsubscribe(...);
                 return applyHystrixSemantics(_cmd);
             }
         };
@@ -464,7 +469,7 @@ import java.util.concurrent.atomic.AtomicReference;
             }
         };
 
-        // HystrixCommand回调流程1: toBlocking()就会执行下面defer里的回调Func0
+        // HystrixCommand回调流程1: toBlocking().toFuture()就会执行下面defer里的回调Func0, 去创建一个Observable
         return Observable.defer(new Func0<Observable<R>>() {
             @Override
             public Observable<R> call() {
@@ -504,6 +509,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
                 // 真正执行业务代码的地方在applyHystrixSemantics里
                 Observable<R> hystrixObservable =
+                        // 调用applyHystrixSemantics去创建一个Observable
                         Observable.defer(applyHystrixSemantics)
                                 .map(wrapWithAllOnNextHooks);
 
@@ -528,7 +534,7 @@ import java.util.concurrent.atomic.AtomicReference;
                     afterCache = hystrixObservable;
                 }
 
-                // 注册3个Action0
+
                 return afterCache
                         // 会在Observable结束前回调terminateCommandCleanup, 无论是正常还是异常终止
                         .doOnTerminate(terminateCommandCleanup)     // perform cleanup once (either on normal terminal state (this line), or unsubscribe (next line))
@@ -552,15 +558,18 @@ import java.util.concurrent.atomic.AtomicReference;
             // 正常第一次进来是允许执行的
             final TryableSemaphore executionSemaphore = getExecutionSemaphore();
             final AtomicBoolean semaphoreHasBeenReleased = new AtomicBoolean(false);
+            // doOnTerminate和doOnUnsubscribe都会触发这个Action0, 去释放信号量
             final Action0 singleSemaphoreRelease = new Action0() {
                 @Override
                 public void call() {
+                    // CAS保证只释放1次信号量
                     if (semaphoreHasBeenReleased.compareAndSet(false, true)) {
                         executionSemaphore.release();
                     }
                 }
             };
 
+            // 当executeCommandAndObserve创建的Observable执行时发生异常后, 触发doOnError
             final Action1<Throwable> markExceptionThrown = new Action1<Throwable>() {
                 @Override
                 public void call(Throwable t) {
@@ -568,26 +577,32 @@ import java.util.concurrent.atomic.AtomicReference;
                 }
             };
 
-            // 获取信号量, 如果隔离策略是线程池的话, 这里就固定是true
+            // 获取信号量
+            // 如果隔离策略是线程池的话, 这里就固定是true
+            // 如果隔离策略是信号量的话, 这里就是TryableSemaphoreActual, 基于AtomicInteger来控制信号量
             if (executionSemaphore.tryAcquire()) {
                 try {
                     /* used to track userThreadExecutionTime */
                     executionResult = executionResult.setInvocationStartTime(System.currentTimeMillis());
+                    // executeCommandAndObserve构造了一个Observable, 然后注册上各种回调函数, 交给subscribeOn里面的线程池去执行
+                    // Observable.defer(...).doOnTerminate(...).doOnUnsubscribe(...).subscribeOn(...)
+                    //         .doOnNext(...).doOnCompleted(...).onErrorResumeNext(...).doOnEach(...)
                     return executeCommandAndObserve(_cmd)
-                            //
+                            // 当executeCommandAndObserve创建的Observable执行时发生异常后, 触发doOnError
                             .doOnError(markExceptionThrown)
-                            // 会在Observable结束前回调singleSemaphoreRelease, 无论是正常还是异常终止
+                            // 会在Observable结束前回调singleSemaphoreRelease, 无论是正常还是异常终止, 在doOnError后执行
                             .doOnTerminate(singleSemaphoreRelease)
-                            // 取消订阅时的监听会回调singleSemaphoreRelease
+                            // 取消订阅时的监听会回调singleSemaphoreRelease, 无论是正常还是异常终止, 在doOnTerminate后执行
                             .doOnUnsubscribe(singleSemaphoreRelease);
                 } catch (RuntimeException e) {
                     return Observable.error(e);
                 }
             } else {
+                // 如果发生信号量获取不到, 就触发fallback, 创建一个用于fallback的Observable
                 return handleSemaphoreRejectionViaFallback();
             }
         } else {
-            // 如果发生了断路, 就触发fallback
+            // 如果发生了断路, 就触发fallback, 创建一个用于fallback的Observable
             return handleShortCircuitViaFallback();
         }
     }
@@ -632,7 +647,7 @@ import java.util.concurrent.atomic.AtomicReference;
             }
         };
 
-        // HystrixCommand回调流程6:
+
         final Func1<Throwable, Observable<R>> handleFallback = new Func1<Throwable, Observable<R>>() {
             @Override
             public Observable<R> call(Throwable t) {
@@ -659,7 +674,7 @@ import java.util.concurrent.atomic.AtomicReference;
             }
         };
 
-        // HystrixCommand回调流程8:
+
         final Action1<Notification<? super R>> setRequestContext = new Action1<Notification<? super R>>() {
             @Override
             public void call(Notification<? super R> rNotification) {
@@ -676,6 +691,8 @@ import java.util.concurrent.atomic.AtomicReference;
             execution = executeCommandWithSpecifiedIsolation(_cmd);
         }
 
+        // executeCommandWithSpecifiedIsolation构造了一个Observable, 然后注册上各种回调函数, 交给subscribeOn里面的线程池去执行
+        // Observable.defer(...).doOnTerminate(...).doOnUnsubscribe(...).subscribeOn(...)
         return execution.doOnNext(markEmits)
                 .doOnCompleted(markOnCompleted)
                 .onErrorResumeNext(handleFallback)
@@ -686,7 +703,6 @@ import java.util.concurrent.atomic.AtomicReference;
         if (properties.executionIsolationStrategy().get() == ExecutionIsolationStrategy.THREAD) {
             // mark that we are executing in a thread (even if we end up being rejected we still were a THREAD execution and not SEMAPHORE)
             // 如果隔离策略是线程池方式
-            // HystrixCommand回调流程3:
             return Observable.defer(new Func0<Observable<R>>() {
                 @Override
                 public Observable<R> call() {
@@ -731,7 +747,6 @@ import java.util.concurrent.atomic.AtomicReference;
             }).doOnTerminate(new Action0() {
                 @Override
                 public void call() {
-                    // HystrixCommand回调流程7:
                     if (threadState.compareAndSet(ThreadState.STARTED, ThreadState.TERMINAL)) {
                         handleThreadEnd(_cmd);
                     }
@@ -743,7 +758,6 @@ import java.util.concurrent.atomic.AtomicReference;
             }).doOnUnsubscribe(new Action0() {
                 @Override
                 public void call() {
-                    // HystrixCommand回调流程4:
                     if (threadState.compareAndSet(ThreadState.STARTED, ThreadState.UNSUBSCRIBED)) {
                         handleThreadEnd(_cmd);
                     }
@@ -759,6 +773,7 @@ import java.util.concurrent.atomic.AtomicReference;
                     return properties.executionIsolationThreadInterruptOnTimeout().get() && _cmd.isCommandTimedOut.get() == TimedOutStatus.TIMED_OUT;
                 }
             }));
+            // 过了这里之后就去创建worker, 执行上面创建的HystrixContextScheduler的createWorker方法
         } else {
             // 如果隔离策略是信号量方式
             return Observable.defer(new Func0<Observable<R>>() {
@@ -1028,7 +1043,7 @@ import java.util.concurrent.atomic.AtomicReference;
         Exception shortCircuitException = new RuntimeException("Hystrix circuit short-circuited and is OPEN");
         executionResult = executionResult.setExecutionException(shortCircuitException);
         try {
-            //
+            // 创建一个用于fallback的Observable
             return getFallbackOrThrowException(this, HystrixEventType.SHORT_CIRCUITED, FailureType.SHORTCIRCUIT,
                     "short-circuited", shortCircuitException);
         } catch (Exception e) {

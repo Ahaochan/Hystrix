@@ -65,6 +65,8 @@ public class HystrixContextScheduler extends Scheduler {
 
     @Override
     public Worker createWorker() {
+        // 默认的actualScheduler就是上面创建的ThreadPoolScheduler
+        // HystrixContextSchedulerWorker代理了ThreadPoolScheduler创建的worker
         return new HystrixContextSchedulerWorker(actualScheduler.createWorker());
     }
 
@@ -88,6 +90,7 @@ public class HystrixContextScheduler extends Scheduler {
 
         @Override
         public Subscription schedule(Action0 action, long delayTime, TimeUnit unit) {
+            // 如果队列满了, 就抛出异常
             if (threadPool != null) {
                 if (!threadPool.isQueueSpaceAvailable()) {
                     throw new RejectedExecutionException("Rejected command because thread-pool queueSize is at rejection threshold.");
@@ -98,6 +101,7 @@ public class HystrixContextScheduler extends Scheduler {
 
         @Override
         public Subscription schedule(Action0 action) {
+            // 如果队列满了, 就抛出异常
             if (threadPool != null) {
                 if (!threadPool.isQueueSpaceAvailable()) {
                     throw new RejectedExecutionException("Rejected command because thread-pool queueSize is at rejection threshold.");
@@ -168,6 +172,7 @@ public class HystrixContextScheduler extends Scheduler {
             subscription.add(sa);
             sa.addParent(subscription);
 
+            // 拿到线程池, 将任务提交到线程池
             ThreadPoolExecutor executor = (ThreadPoolExecutor) threadPool.getExecutor();
             FutureTask<?> f = (FutureTask<?>) executor.submit(sa);
             sa.add(new FutureCompleterWithConfigurableInterrupt(f, shouldInterruptThread, executor));

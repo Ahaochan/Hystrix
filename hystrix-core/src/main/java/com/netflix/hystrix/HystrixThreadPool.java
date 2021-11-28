@@ -207,7 +207,9 @@ public interface HystrixThreadPool {
 
         @Override
         public Scheduler getScheduler(Func0<Boolean> shouldInterruptThread) {
+            // 设置了线程动态增长才会触发touchConfig
             touchConfig();
+            // 返回了一个Scheduler, 然后rxjava内部会调用HystrixContextScheduler的createWorker方法, 去submit到线程池
             return new HystrixContextScheduler(HystrixPlugins.getInstance().getConcurrencyStrategy(), this, shouldInterruptThread);
         }
 
@@ -266,6 +268,7 @@ public interface HystrixThreadPool {
          */
         @Override
         public boolean isQueueSpaceAvailable() {
+            // queueSize默认是-1
             if (queueSize <= 0) {
                 // we don't have a queue so we won't look for space but instead
                 // let the thread-pool reject or not

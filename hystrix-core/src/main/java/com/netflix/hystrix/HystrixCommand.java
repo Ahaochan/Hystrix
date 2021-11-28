@@ -380,6 +380,7 @@ public abstract class HystrixCommand<R> extends AbstractCommand<R> implements Hy
          */
         // 这里丢到线程池去执行, 拿到的异步Future对象, 是不具备中断能力的, 不能在超时、异常的时候中止这个Future对象线程的执行
         // 所以要在下面进行一个包装
+        // 等价于 Observable.defer(...).toBlocking().toFuture()
         final Future<R> delegate = toObservable().toBlocking().toFuture();
 
         // 包装上面的delegate, 增强cancel方法, 外部调用这个Future的cancel方法就可以中断上面的delegate Future所在的线程
