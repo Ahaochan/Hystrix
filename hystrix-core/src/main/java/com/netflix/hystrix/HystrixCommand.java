@@ -320,6 +320,7 @@ public abstract class HystrixCommand<R> extends AbstractCommand<R> implements Hy
             @Override
             public Observable<R> call() {
                 try {
+                    // 去执行自定义的fallback降级策略
                     return Observable.just(getFallback());
                 } catch (Throwable ex) {
                     return Observable.error(ex);

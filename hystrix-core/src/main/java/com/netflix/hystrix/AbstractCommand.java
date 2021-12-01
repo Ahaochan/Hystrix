@@ -648,7 +648,7 @@ import java.util.concurrent.atomic.AtomicReference;
             }
         };
 
-
+        // 处理所有异常信息, 拒绝、超时、出错
         final Func1<Throwable, Observable<R>> handleFallback = new Func1<Throwable, Observable<R>>() {
             @Override
             public Observable<R> call(Throwable t) {
@@ -656,10 +656,13 @@ import java.util.concurrent.atomic.AtomicReference;
                 Exception e = getExceptionFromThrowable(t);
                 executionResult = executionResult.setExecutionException(e);
                 if (e instanceof RejectedExecutionException) {
+                    // 处理拒绝异常, 队列满了
                     return handleThreadPoolRejectionViaFallback(e);
+                    // 处理超时异常
                 } else if (t instanceof HystrixTimeoutException) {
                     return handleTimeoutViaFallback();
                 } else if (t instanceof HystrixBadRequestException) {
+                    // 处理错误请求
                     return handleBadRequestByEmittingError(e);
                 } else {
                     /*
@@ -916,9 +919,11 @@ import java.util.concurrent.atomic.AtomicReference;
                     try {
                         if (isFallbackUserDefined()) {
                             executionHook.onFallbackStart(this);
+                            // 去执行自定义的fallback降级策略
                             fallbackExecutionChain = getFallbackObservable();
                         } else {
                             //same logic as above without the hook invocation
+                            // 去执行自定义的fallback降级策略
                             fallbackExecutionChain = getFallbackObservable();
                         }
                     } catch (Throwable ex) {
