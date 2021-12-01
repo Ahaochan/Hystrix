@@ -554,7 +554,7 @@ import java.util.concurrent.atomic.AtomicReference;
         executionHook.onStart(_cmd);
 
         /* determine if we're allowed to execute */
-        // 断路器会判断是否允许执行
+        // 断路器会判断是否允许执行, 如果打开了断路器, 就尝试执行一次请求, 如果成功就关闭断路器
         if (circuitBreaker.attemptExecution()) {
             // 正常第一次进来是允许执行的
             final TryableSemaphore executionSemaphore = getExecutionSemaphore();
