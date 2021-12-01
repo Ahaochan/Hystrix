@@ -164,8 +164,9 @@ import java.util.concurrent.atomic.AtomicReference;
         this.properties = initCommandProperties(this.commandKey, propertiesStrategy, commandPropertiesDefaults);
         this.threadPoolKey = initThreadPoolKey(threadPoolKey, this.commandGroup, this.properties.executionIsolationThreadPoolKeyOverride().get());
         this.metrics = initMetrics(metrics, this.commandGroup, this.threadPoolKey, this.commandKey, this.properties);
+        // 在创建HystrixCommand的时候, 就初始化好熔断器了, 默认实现类是HystrixCircuitBreakerImpl
         this.circuitBreaker = initCircuitBreaker(this.properties.circuitBreakerEnabled().get(), circuitBreaker, this.commandGroup, this.commandKey, this.properties, this.metrics);
-        // 在创建HystrixCommand的时候, 就初始化好线程池了
+        // 在创建HystrixCommand的时候, 就初始化好线程池了, HystrixThreadPool线程池的默认实现类是HystrixThreadPoolDefault
         this.threadPool = initThreadPool(threadPool, this.threadPoolKey, threadPoolPropertiesDefaults);
 
         //Strategies from plugins
@@ -276,7 +277,7 @@ import java.util.concurrent.atomic.AtomicReference;
     private static HystrixThreadPool initThreadPool(HystrixThreadPool fromConstructor, HystrixThreadPoolKey threadPoolKey, HystrixThreadPoolProperties.Setter threadPoolPropertiesDefaults) {
         if (fromConstructor == null) {
             // get the default implementation of HystrixThreadPool
-            // 如果外部没有传入线程池, 就做自己初始化一个线程池
+            // 如果外部没有传入线程池, 就做自己初始化一个线程池, HystrixThreadPool线程池的默认实现类是HystrixThreadPoolDefault
             return HystrixThreadPool.Factory.getInstance(threadPoolKey, threadPoolPropertiesDefaults);
         } else {
             // 如果外部传入了线程池就使用外部的线程池

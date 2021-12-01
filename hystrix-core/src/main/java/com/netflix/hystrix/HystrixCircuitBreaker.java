@@ -175,7 +175,11 @@ public interface HystrixCircuitBreaker {
 
                         @Override
                         public void onNext(HealthCounts hc) {
+                            // onNext()会对统计信息做各种检查, 有新的统计信息就会回调这个方法
+                            // 默认传递最近10秒内的统计信息
+
                             // check if we are past the statisticalWindowVolumeThreshold
+                            // 如果10秒内的总请求数量少于20, 就不处理逻辑
                             if (hc.getTotalRequests() < properties.circuitBreakerRequestVolumeThreshold().get()) {
                                 // we are not past the minimum volume threshold for the stat window,
                                 // so no change to circuit status.
@@ -183,6 +187,7 @@ public interface HystrixCircuitBreaker {
                                 // if it was half-open, we need to wait for a successful command execution
                                 // if it was open, we need to wait for sleep window to elapse
                             } else {
+                                // 如果10秒内的请求错误百分比少于50, 就不处理逻辑
                                 if (hc.getErrorPercentage() < properties.circuitBreakerErrorThresholdPercentage().get()) {
                                     //we are not past the minimum error threshold for the stat window,
                                     // so no change to circuit status.
@@ -191,6 +196,7 @@ public interface HystrixCircuitBreaker {
                                     // if it was open, we need to wait for sleep window to elapse
                                 } else {
                                     // our failure rate is too high, we need to set the state to OPEN
+                                    // 否则, 请求数量大于等于20, 且错误请求大于50%, 就打开断路器, 记录断路器开启的时间戳
                                     if (status.compareAndSet(Status.CLOSED, Status.OPEN)) {
                                         circuitOpened.set(System.currentTimeMillis());
                                     }
@@ -262,20 +268,25 @@ public interface HystrixCircuitBreaker {
 
         @Override
         public boolean attemptExecution() {
+            // 如果强制开启断路器, 就不允许执行请求
             if (properties.circuitBreakerForceOpen().get()) {
                 return false;
             }
+            // 如果强制关闭断路器, 就允许执行请求
             if (properties.circuitBreakerForceClosed().get()) {
                 return true;
             }
+            // 如果还没有发生过断路, 没有记录第一次断路的时间戳, 就允许执行请求
             if (circuitOpened.get() == -1) {
                 return true;
             } else {
+                // 如果已经发生过断路, 就判断是否到下一个时间窗口
                 if (isAfterSleepWindow()) {
                     //only the first request after sleep window should execute
                     //if the executing command succeeds, the status will transition to CLOSED
                     //if the executing command fails, the status will transition to OPEN
                     //if the executing command gets unsubscribed, the status will transition to OPEN
+                    // 然后将断路器设置为半开状态, 尝试执行一次请求
                     if (status.compareAndSet(Status.OPEN, Status.HALF_OPEN)) {
                         return true;
                     } else {
