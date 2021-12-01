@@ -587,6 +587,7 @@ import java.util.concurrent.atomic.AtomicReference;
                     // executeCommandAndObserve构造了一个Observable, 然后注册上各种回调函数, 交给subscribeOn里面的线程池去执行
                     // Observable.defer(...).doOnTerminate(...).doOnUnsubscribe(...).subscribeOn(...)
                     //         .doOnNext(...).doOnCompleted(...).onErrorResumeNext(...).doOnEach(...)
+                    // executeCommandAndObserve内会注册上超时的检测机制
                     return executeCommandAndObserve(_cmd)
                             // 当executeCommandAndObserve创建的Observable执行时发生异常后, 触发doOnError
                             .doOnError(markExceptionThrown)
@@ -1200,12 +1201,14 @@ import java.util.concurrent.atomic.AtomicReference;
             //capture the HystrixRequestContext upfront so that we can use it in the timeout thread later
             final HystrixRequestContext hystrixRequestContext = HystrixRequestContext.getContextForCurrentThread();
 
+            // 默认每秒执行一次, 检查是否超时
             TimerListener listener = new TimerListener() {
 
                 @Override
                 public void tick() {
                     // if we can go from NOT_EXECUTED to TIMED_OUT then we do the timeout codepath
                     // otherwise it means we lost a race and the run() execution completed or did not start
+                    // 默认超时时间1秒, 检查isCommandTimedOut状态判断是否超时, 如果状态是NOT_EXECUTED, 就设置为超时TIMED_OUT
                     if (originalCommand.isCommandTimedOut.compareAndSet(TimedOutStatus.NOT_EXECUTED, TimedOutStatus.TIMED_OUT)) {
                         // report timeout failure
                         originalCommand.eventNotifier.markEvent(HystrixEventType.TIMEOUT, originalCommand.commandKey);
@@ -1213,6 +1216,7 @@ import java.util.concurrent.atomic.AtomicReference;
                         // shut down the original request
                         s.unsubscribe();
 
+                        // 如果超时了, 就抛出一个HystrixTimeoutException
                         final HystrixContextRunnable timeoutRunnable = new HystrixContextRunnable(originalCommand.concurrencyStrategy, hystrixRequestContext, new Runnable() {
 
                             @Override
@@ -1229,6 +1233,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
                 @Override
                 public int getIntervalTimeInMilliseconds() {
+                    // 默认超时时间是1s, IntervalTimeInMilliseconds用来定时去执行tick()方法
                     return originalCommand.properties.executionTimeoutInMilliseconds().get();
                 }
             };

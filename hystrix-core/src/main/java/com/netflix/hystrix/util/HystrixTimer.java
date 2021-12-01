@@ -88,6 +88,7 @@ public class HystrixTimer {
      * @return reference to the TimerListener that allows cleanup via the <code>clear()</code> method
      */
     public Reference<TimerListener> addTimerListener(final TimerListener listener) {
+        // 为executor变量赋予ScheduledExecutor, 并执行initialize初始化方法, 定时去执行一些逻辑
         startThreadIfNeeded();
         // add the listener
 
@@ -135,6 +136,7 @@ public class HystrixTimer {
         while (executor.get() == null || ! executor.get().isInitialized()) {
             if (executor.compareAndSet(null, new ScheduledExecutor())) {
                 // initialize the executor that we 'won' setting
+                // 为executor变量赋予ScheduledExecutor, 并执行initialize初始化方法, 定时去执行一些逻辑
                 executor.get().initialize();
             }
         }
@@ -169,6 +171,7 @@ public class HystrixTimer {
                 threadFactory = PlatformSpecific.getAppEngineThreadFactory();
             }
 
+            // 底层是使用JDK自带的ScheduledThreadPoolExecutor线程池, 默认核心线程数是CPU核数
             executor = new ScheduledThreadPoolExecutor(coreSize, threadFactory);
             initialized = true;
         }
